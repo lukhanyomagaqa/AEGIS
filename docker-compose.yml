@@ -1,0 +1,87 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aegis_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-aegis_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_only_change_me}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - aegis
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - aegis
+
+  api:
+    image: python:3.12-slim
+    working_dir: /workspace
+    command:
+      - sh
+      - -c
+      - pip install --disable-pip-version-check -r backend/requirements.txt && uvicorn aegis.main:app --app-dir backend/src --host 0.0.0.0 --port 8000 --reload
+    environment:
+      AEGIS_ENVIRONMENT: ${AEGIS_ENVIRONMENT:-development}
+      AEGIS_LOG_LEVEL: ${AEGIS_LOG_LEVEL:-INFO}
+      AEGIS_API_PREFIX: ${AEGIS_API_PREFIX:-/api/v1}
+      AEGIS_DATABASE_URL: ${AEGIS_DATABASE_URL:-postgresql://aegis_dev:local_only_change_me@db:5432/aegis_dev}
+      AEGIS_REDIS_URL: ${AEGIS_REDIS_URL:-redis://redis:6379/0}
+      AEGIS_REDIS_REQUIRED: ${AEGIS_REDIS_REQUIRED:-false}
+      AEGIS_CORS_ORIGINS: ${AEGIS_CORS_ORIGINS:-http://localhost:5173}
+    volumes:
+      - .:/workspace
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aegis
+
+  web:
+    image: node:22-alpine
+    working_dir: /workspace/frontend
+    command:
+      - sh
+      - -c
+      - npm install --no-audit --no-fund && npm run dev -- --host 0.0.0.0
+    volumes:
+      - ./frontend:/workspace/frontend
+      - frontend_node_modules:/workspace/frontend/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    networks:
+      - aegis
+
+volumes:
+  postgres_data:
+  frontend_node_modules:
+
+networks:
+  aegis:
+    driver: bridge
